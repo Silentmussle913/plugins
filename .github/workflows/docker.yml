@@ -17,6 +17,8 @@ jobs:
     outputs:
       build_base: ${{ steps.set-matrix.outputs.build_base }}
       build_uhc: ${{ steps.set-matrix.outputs.build_uhc }}
+      build_factions: ${{ steps.set-matrix.outputs.build_factions }}
+      build_vanillagen: ${{ steps.set-matrix.outputs.build_vanillagen }}
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
       - uses: actions/checkout@v7
@@ -121,6 +123,16 @@ jobs:
             BUILD_UHC=true
           fi
 
+          BUILD_FACTIONS=false
+          if [ "$FORCE_ALL" = "true" ] || [ "${{ steps.filter.outputs.factions }}" = "true" ]; then
+            BUILD_FACTIONS=true
+          fi
+
+          BUILD_VANILLAGEN=false
+          if [ "$BUILD_UHC" = "true" ] || [ "$BUILD_FACTIONS" = "true" ]; then
+            BUILD_VANILLAGEN=true
+          fi
+
           ALL='[
             {"plugin":"Lobby","artifact":"xLobby","phar":"xLobby.phar","tag":"lobby"},
             {"plugin":"Skywars","artifact":"xSkywars","phar":"xSkywars.phar","tag":"skywars"},
@@ -133,8 +145,7 @@ jobs:
             {"plugin":"TheBridge","artifact":"xTheBridge","phar":"xTheBridge.phar","tag":"thebridge"},
             {"plugin":"SurvivalGames","artifact":"xSurvivalGames","phar":"xSurvivalGames.phar","tag":"survivalgames"},
             {"plugin":"Meltdown","artifact":"xMeltdown","phar":"xMeltdown.phar","tag":"meltdown"},
-            {"plugin":"SkyBlock","artifact":"xSkyBlock","phar":"xSkyBlock.phar","tag":"skyblock"},
-            {"plugin":"Factions","artifact":"xFactions","phar":"xFactions.phar","tag":"factions"}
+            {"plugin":"SkyBlock","artifact":"xSkyBlock","phar":"xSkyBlock.phar","tag":"skyblock"}
           ]'
 
           if [ "$FORCE_ALL" = "true" ]; then
@@ -177,13 +188,12 @@ jobs:
             if [ "${{ steps.filter.outputs.skyblock }}" = "true" ]; then
               INCLUDE=$(echo "$INCLUDE" | jq -c --argjson all "$ALL" '. += [$all[11]]')
             fi
-            if [ "${{ steps.filter.outputs.factions }}" = "true" ]; then
-              INCLUDE=$(echo "$INCLUDE" | jq -c --argjson all "$ALL" '. += [$all[12]]')
-            fi
           fi
 
           echo "build_base=$BUILD_BASE" >> $GITHUB_OUTPUT
           echo "build_uhc=$BUILD_UHC" >> $GITHUB_OUTPUT
+          echo "build_factions=$BUILD_FACTIONS" >> $GITHUB_OUTPUT
+          echo "build_vanillagen=$BUILD_VANILLAGEN" >> $GITHUB_OUTPUT
           echo "matrix={\"include\":$INCLUDE}" >> $GITHUB_OUTPUT
 
   quiche:
@@ -309,7 +319,7 @@ jobs:
     name: Build VanillaGenerator.phar
     needs: changes
     runs-on: ubuntu-latest
-    if: "github.event.workflow_run.conclusion == 'success' && needs.changes.outputs.build_uhc == 'true'"
+    if: "github.event.workflow_run.conclusion == 'success' && needs.changes.outputs.build_vanillagen == 'true'"
     steps:
       - name: Checkout VanillaGenerator
         uses: actions/checkout@v7
@@ -539,4 +549,54 @@ jobs:
           file: ./UHC/Dockerfile
           push: true
           tags: "nethergamesmc/servers:uhc"
+          build-args: "BUILD_FROM=nethergamesmc/servers:base"
+
+  game-factions:
+    name: Build & push factions image
+    needs: [changes, base, vanillagenerator]
+    runs-on: ubuntu-latest
+    if: "always() && github.event.workflow_run.conclusion == 'success' && needs.changes.outputs.build_factions == 'true' && (needs.base.result == 'success' || needs.base.result == 'skipped') && (needs.vanillagenerator.result == 'success' || needs.vanillagenerator.result == 'skipped')"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Checkout assets
+        uses: actions/checkout@v7
+        with:
+          repository: NetherGamesMC/assets
+          token: ${{ secrets.ng_token }}
+          path: assets
+
+      - name: Download xFactions.phar
+        uses: actions/download-artifact@v8
+        with:
+          name: xFactions
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.event.workflow_run.id }}
+          path: .
+
+      - name: Download VanillaGenerator.phar
+        uses: actions/download-artifact@v8
+        with:
+          name: VanillaGenerator
+          path: .
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Login to DockerHub
+        uses: docker/login-action@v4.6.0
+        with:
+          username: ${{ secrets.docker_username }}
+          password: ${{ secrets.docker_password }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Factions/Dockerfile
+          push: true
+          tags: "nethergamesmc/servers:factions"
           build-args: "BUILD_FROM=nethergamesmc/servers:base"
